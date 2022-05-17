@@ -1,0 +1,15 @@
+####try:
+    while True:
+        try:
+            test = "test"
+            temperature = random.randrange(10, 20)
+            message = Message(json.dumps({"temperature": temperature}))
+            message.content_encoding = "utf-8"
+            message.content_type = "application/json"
+            client.send_message(message)
+            print("message {} sent".format(message))
+        except: 
+            print(traceback.format_exc())
+            print("stopped")
+except KeyboardInterrupt:
+    print("Interrupt")####
