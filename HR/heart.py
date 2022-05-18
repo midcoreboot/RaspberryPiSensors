@@ -1,78 +1,100 @@
 #!/usr/bin/env python3
  
-import pygatt, time, os, json
+import time, os, json
+from bluepy import btle
+import binascii
 import logging
 import threading
 import traceback
-import datetime
+from datetime import datetime
 from azure.iot.device import IoTHubDeviceClient, Message
-from REC import RecEdgeMessage, Observation
-
+from REC import Observation, RecEdgeMessage
+ 
 class HR():
     def __init__(self):
+        # Set the mac address of the sensor for this raspberry pi.
         self.address       = ""
-        self.model_uid     = "00002a24-0000-1000-8000-00805f9b34fb"
-        self.battery_uid   = "00002a19-0000-1000-8000-00805f9b34fb"
-        self.heartbeat_uid = "00002a37-0000-1000-8000-00805f9b34fb"
+        self.hrService = "0000180d-0000-1000-8000-00805f9b34fb"
+        self.peripheral = btle.Peripheral()
+        self.isConnected = False
         self.hr = 0
+        self.lastHr = 0
         self.startflag = False
-
-    def start(self):        
-        os.system("sudo python scan.py")
-        with open("scan.txt", "r") as f:
-            self.address = f.readline()
+ 
+    def start(self):
         if not self.address:
+            print("Please chose an address to the HR sensor.")
             return
         print("running with {}".format(self.address))
         self.startflag = True
-        x = threading.Thread(target=self.heart_data)
-        x.start()
-
+        self.heart_data()
+ 
     def heart_data(self):
-        adapter = pygatt.GATTToolBackend() # for posix compliant os'ses
-        
         try:
-            adapter.start()
-            device = adapter.connect(self.address, timeout=15)
-            model = device.char_read(self.model_uid).decode("utf-8")
-            battery = device.char_read(self.battery_uid)[0]
-            print("device: {:s}, battery {:d}%, press enter to stop recording heart rate".format(model, battery))
-            device.subscribe(self.heartbeat_uid, callback=lambda handle, value: self.devicedata(value[1]))
-            input()
-        finally:
-            adapter.stop()
-        
-
+            print("Connecting to address.")
+            self.peripheral.connect(self.address)
+            #Set the delegate to the one created.
+            self.peripheral.setDelegate(MyDelegate())
+            #Get the HR measurement service
+            svc = self.peripheral.getServiceByUUID(btle.UUID(self.hrService))
+            #Get the HR characteristic.
+            ch = svc.getCharacteristics()[0]
+            #Tell the characteristic we want to be subscribed to it
+            self.peripheral.writeCharacteristic(ch.valHandle+1, b"\x01\00")
+            self.isConnected = True
+        except Exception as E:
+            self.peripheral.disconnect()
+            print("exception caught")
+ 
+ 
     def devicedata(self, data):
+        print("subscription gave: {}".format(data))
         self.hr = data
-
+ 
     def read(self, client):
         if not self.startflag:
             self.start()
         self.send_to_azure(client)
         return ({'hr': self.hr})
-
+ 
     def send_to_azure(self, client):
         try:
             if self.hr != 0:
+                #Change "heartrateTest to the digital twin id of the sensor."
                 observation = Observation(datetime.now(), self.hr, None, None, "heartrateTest")
                 rec = RecEdgeMessage(None, [observation])
                 recJSON = rec.toJSON()
                 message = Message(recJSON.encode('ascii'))
                 message.content_encoding = "utf-8"
                 message.content_type = "application/json"
-                client.send_message(message)
-                print ( "Message {} successfully sent".format(message))    
+                #client.send_message(message)
+                #print ( "Message {} successfully sent".format(message))    
             else:
                 print("No message was sent since the HR was at 0")
         except:
             print(traceback.format_exc())
             print ( "IoTHubClient sample stopped" )
-
+ 
 hr = HR()
-CONNECTION_STRING = "HostName=livinglab.azure-devices.net;DeviceId=adyashaheartrate;SharedAccessKey=usYjTnlycijFApxdxLqQBDWo4kSZ0ogL/LuD+oBbFOs="
-#CONNECTION_STRING = "HostName=heartrate.azure-devices.net;DeviceId=demoDevice;SharedAccessKey=IGc1Sww/ibfCjidrr+P9ATez+FcSEh64iplN88vbRzY="
+#Change to the sensors IoT device connection string
+CONNECTION_STRING = "HostName=JTH-Smart-Space-Hub.azure-devices.net;DeviceId=HeartrateSensor;SharedAccessKey=Pi0XpNeeuiCFkeFbBTPvSMonwws+kQFEQT87hww1LNM="
+ 
+class MyDelegate(btle.DefaultDelegate):
+    def __init__(self):
+        btle.DefaultDelegate.__init__(self)
+    def handleNotification(self, cHandle, data):
+        intData = int.from_bytes(data, "big")
+        hr.devicedata(intData)
+ 
 client = IoTHubDeviceClient.create_from_connection_string(CONNECTION_STRING)
 while True:
-    hr.read(client)
-    time.sleep(1)
+    if hr.isConnected == True:
+        print("Waiting....")
+        if hr.peripheral.waitForNotifications(2.0):
+            print("HR {}".format(hr.read(client)))
+            time.sleep(2)
+            continue
+    else:
+        print("HR {}".format(hr.read(client)))
+        time.sleep(5)
+ 
