@@ -9,24 +9,27 @@ from datetime import datetime
 from REC import Observation, RecEdgeMessage
 from azure.iot.device import IoTHubDeviceClient, Message
 import logging
- 
+
+#Put the IoT Hub device connection string here.
+#The deviceId should be the raspberry pi's MAC address.
 CONNECTION_STRING = "HostName=JTH-Smart-Space-Hub.azure-devices.net;DeviceId=b827ebac49b6;SharedAccessKey=TqC/e8lpRbhlDOrtAnyBX/1tqRSAtdLjbaTw15Byi7k="
- 
+
 class Grove:
     def __init__(self, channel):
         self.channel = channel
         self.adc = ADC()
- 
+    
     @property
     def GSR(self):
         value = self.adc.read(self.channel)
         return value
- 
+
 class HR():
     def __init__(self):
-        # Set the mac address of the sensor for this raspberry pi.
+        # Set the mac address of the HR sensor for this raspberry pi.
         self.address = "A0:9E:1A:A4:22:ED"
         self.hrService = "0000180d-0000-1000-8000-00805f9b34fb"
+        #Peripheral is the bluepy object we use to communicate with the sensor via BT
         self.peripheral = btle.Peripheral()
         self.isConnected = False
         self.hr = 0
@@ -42,8 +45,7 @@ class HR():
  
     def heart_data(self):
         try:
-            print("Connecting to address.")
-            print(self.peripheral)
+            print("Connecting to address {}.".format(self.address))
             self.peripheral.connect(self.address)
             #Set the delegate to the one created.
             self.peripheral.setDelegate(MyDelegate())
@@ -56,6 +58,8 @@ class HR():
             time.sleep(3)
             self.isConnected = True
         except:
+            self.startflag = False
+            self.isConnected = True
             print(traceback.format_exc())
             print("exception caught")
  
@@ -69,19 +73,22 @@ class HR():
         if not self.startflag:
             self.start()
         return self.hr
- 
+
 client = IoTHubDeviceClient.create_from_connection_string(CONNECTION_STRING)
 hr = HR()
+# The parameter here is the ADC channel the GSR sensor is connected on. 0 is the A0.
 gsr = Grove(0)
- 
+
 class MyDelegate(btle.DefaultDelegate):
     def __init__(self):
         btle.DefaultDelegate.__init__(self)
     def handleNotification(self, cHandle, data):
+        #this is the code that is ran when we get an HR measurement notification.
         intData = int.from_bytes(data, "big")
         hr.devicedata(intData)
- 
+
 try:
+    #Wait for the os to stabilize after bootup.
     time.sleep(10)
     while True:
         if hr.isConnected == True:
@@ -99,14 +106,11 @@ try:
                 print("Sent message to IOT hub: {}".format(recJSON))
                 time.sleep(2)
                 continue
-            else:
-                print("jesus")
         else:
             print("Connecting to HR sensor..")
             print("HR {}".format(hr.read()))
             time.sleep(10)
 except:
     print(traceback.format_exc())
-    print(" SENSOR SCRIPTS CRASHED")
- 
- 
+    print("Sensor.service caught an critical error.")
+
